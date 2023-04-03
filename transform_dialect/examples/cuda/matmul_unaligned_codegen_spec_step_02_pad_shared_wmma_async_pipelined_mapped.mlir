@@ -155,6 +155,7 @@ transform.sequence failures(propagate) {
       ( mapping = [#gpu.linear<y>, #gpu.linear<x>] )
   %tiled_copy_lhs_generic = transform.structured.generalize %tiled_copy_lhs
   transform.structured.masked_vectorize %tiled_copy_lhs_generic vector_sizes [4, 4]
+
   //
   // From now on we can't apply canonicalizations before we lower the masks away.
   //
@@ -176,28 +177,30 @@ transform.sequence failures(propagate) {
       ( mapping = [#gpu.linear<y>, #gpu.linear<x>] )
   %tiled_copy_rhs_generic = transform.structured.generalize %tiled_copy_rhs
   transform.structured.masked_vectorize %tiled_copy_rhs_generic vector_sizes [4, 4]
+  
   //
   // From now on we can't apply canonicalizations before we lower the masks away.
   //
-
   // Play catch me if you can with producing fill and copy ... This one is even 
   // nastier because it goes through bbargs -> just rematch.
   // Need to track better through pad rewrite to DPS.
-  %fill_res = transform.structured.match ops{["linalg.fill"]} in %variant_op 
-    : (!pdl.operation) -> !pdl.operation
-  transform.structured.tile_to_forall_op %fill_res num_threads [2, 2]
-      ( mapping = [#gpu.warp<y>, #gpu.warp<x>] )
   %copy_res = transform.structured.match ops{["linalg.copy"]} in %variant_op 
     : (!pdl.operation) -> !pdl.operation
+  %extract_res = transform.get_producer_of_operand %copy_res[1] 
+     : (!pdl.operation) -> !pdl.operation
+  %fill_res = transform.get_producer_of_operand %extract_res[0] 
+     : (!pdl.operation) -> !pdl.operation
+  transform.structured.tile_to_forall_op %fill_res num_threads [4, 32]
+      ( mapping = [#gpu.linear<y>, #gpu.linear<x>] )
+
   %forall_copy_res, %tiled_copy_res = 
-    transform.structured.tile_to_forall_op %copy_res num_threads [2, 2]
-      ( mapping = [#gpu.warp<y>, #gpu.warp<x>] )
+    transform.structured.tile_to_forall_op %copy_res num_threads [4, 32]
+      ( mapping = [#gpu.linear<y>, #gpu.linear<x>] )
   %tiled_copy_res_generic = transform.structured.generalize %tiled_copy_res
   transform.structured.masked_vectorize %tiled_copy_res_generic vector_sizes [32, 4]
   //
   // From now on we can't apply canonicalizations before we lower the masks away.
   //
-
 
   // Step 5. Contraction part mapped to threads with a **SIMD** programming model.
   // =============================================================================
@@ -343,7 +346,7 @@ transform.sequence failures(propagate) {
     : (!pdl.operation) -> ()
   transform.iree.apply_patterns %func_m_10 {canonicalize, cse, fold_memref_aliases, licm}
     : (!pdl.operation) -> ()
-
+  
   // Step 11. Pipeline shared memory copies.
   // ===========================================================================
   %mma_compute = transform.structured.match ops{["gpu.subgroup_mma_compute"]} in %variant_op_3
